@@ -1,0 +1,11 @@
+timestamp,user_id,post_id,interaction_type,content
+2023-01-01T12:30:45,user1,post1,like,
+2023-01-01T12:35:22,user2,post1,share,
+2023-01-01T12:40:10,user3,post1,comment,"This is concerning news!"
+2023-01-01T13:10:05,user4,post2,like,
+2023-01-01T13:15:30,user5,post2,comment,"I'm not sure this is accurate"
+2023-01-01T14:20:15,user1,post3,share,
+2023-01-02T08:45:33,user6,post1,like,
+2023-01-02T09:30:00,user7,post4,comment,"This matches what I've heard"
+2023-01-02T10:15:22,user8,post4,like,
+2023-01-02T11:05:18,user9,post5,share, 

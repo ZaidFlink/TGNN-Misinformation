@@ -1,0 +1,109 @@
+# General settings
+general:
+  seed: 42
+  device: 'cuda'  # or 'cpu'
+  num_epochs: 100
+  early_stopping_patience: 10
+  log_interval: 10
+  tensorboard_log_dir: 'logs/'
+  save_dir: 'checkpoints/'
+
+# Dataset settings
+data:
+  datasets:
+    - coaid
+    - fakenewsnet
+    - tgb
+  temporal_split:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+  shuffle: false  # Keep temporal order
+  max_nodes: 100000
+  max_edges: 500000
+  feature_engineering:
+    text:
+      use_tfidf: true
+      max_features: 5000
+      use_pretrained: true
+      pretrained_model: 'distilbert-base-uncased'
+    user:
+      embedding_dim: 64
+    time:
+      encoding_dim: 32
+  class_weight:
+    enable: true
+    focal_loss_gamma: 2.0
+
+# Model settings
+models:
+  # Temporal Graph Network
+  tgn:
+    node_dim: 128
+    edge_dim: 64
+    time_dim: 32
+    memory_dim: 128
+    num_neighbors: 10
+    num_layers: 2
+    dropout: 0.2
+    use_memory: true
+    memory_updater: 'rnn'  # Options: 'rnn', 'gru'
+    memory_update_at_end: true
+    embedding_module: 'graph_attention'  # Options: 'graph_attention', 'graph_sum', 'identity'
+  
+  # Temporal Graph Attention Network
+  tgat:
+    node_dim: 128
+    time_dim: 32
+    num_heads: 4
+    num_layers: 2
+    dropout: 0.2
+    attention_dim: 16
+    use_time_encoding: true
+    time_encoding_type: 'harmonic'  # Options: 'harmonic', 'linear'
+    ff_hidden_dim: 256
+  
+  # Static Graph Convolutional Network
+  gcn:
+    node_dim: 128
+    hidden_dims: [256, 128, 64]
+    dropout: 0.3
+    snapshot_aggregation: 'mean'  # Options: 'mean', 'max', 'last'
+    num_snapshots: 5
+    include_self_loops: true
+    normalize_adj: true
+
+# Training settings
+training:
+  optimizer: 'adam'
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  lr_scheduler:
+    use: true
+    type: 'reduce_on_plateau'  # Options: 'reduce_on_plateau', 'step', 'cosine'
+    patience: 5
+    factor: 0.5
+  batch_size: 32
+  gradient_clipping: 1.0
+  use_focal_loss: true
+  focal_loss_gamma: 2.0
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1
+    - auc
+  early_detection:
+    time_windows: [1, 3, 6, 12, 24]  # In hours
+    metrics:
+      - time_to_detection
+      - early_precision
+      - early_recall
+  visualization:
+    roc_curve: true
+    confusion_matrix: true
+    training_curves: true
+    early_detection_comparison: true

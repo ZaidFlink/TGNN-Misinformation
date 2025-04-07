@@ -1,0 +1,6 @@
+post_id,author_id,timestamp,content,is_misinformation
+post1,author1,2023-01-01T12:00:00,"Studies show that drinking lemon water cures all types of cancer.",1
+post2,author2,2023-01-01T13:00:00,"New research from Harvard suggests regular exercise may reduce risk of heart disease.",0
+post3,author3,2023-01-01T14:00:00,"Government announces chip implants will be mandatory by 2025.",1
+post4,author4,2023-01-02T09:00:00,"Clinical trials for new COVID treatment show promising results in early stages.",0
+post5,author5,2023-01-02T11:00:00,"Scientists discover that 5G towers are causing bird deaths worldwide.",1 

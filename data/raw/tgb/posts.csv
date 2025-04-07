@@ -1,0 +1,6 @@
+post_id,author_id,timestamp,content,is_misinformation
+post11,author11,2023-03-01T07:00:00,"Exclusive: Government hiding evidence of alien contact, whistleblower reveals.",1
+post12,author12,2023-03-01T09:00:00,"New analysis of economic data suggests moderate growth in upcoming quarter.",0
+post13,author13,2023-03-01T11:00:00,"Scientists confirm drinking alkaline water alters your DNA and prevents aging.",1
+post14,author14,2023-03-02T09:00:00,"Meta-analysis of 50 studies finds strong correlation between diet and longevity.",0
+post15,author15,2023-03-02T12:00:00,"Breaking: Power grid vulnerability could lead to nationwide blackout next month.",1 
