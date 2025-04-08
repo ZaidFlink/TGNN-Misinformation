@@ -18,37 +18,63 @@ class TimeEncodingLayer(nn.Module):
     Based on the Bochner's theorem for harmonic analysis on continuous signals.
     """
     
-    def __init__(self, time_dim):
+    def __init__(self, time_dim, trainable=True, time_scale=1.0):
         """
         Initialize time encoding layer.
         
         Args:
             time_dim (int): Dimension of time encoding.
+            trainable (bool): Whether the basis frequencies are trainable.
+            time_scale (float): Scale factor for time values to control frequency range.
         """
         super(TimeEncodingLayer, self).__init__()
         
         self.time_dim = time_dim
-        self.basis_freq = nn.Parameter(torch.ones(time_dim))
-        self.phase = nn.Parameter(torch.zeros(time_dim))
+        self.trainable = trainable
+        self.time_scale = time_scale
         
-        # Initialize basis frequencies
-        nn.init.xavier_uniform_(self.basis_freq)
+        if trainable:
+            # Create a 2D tensor for proper initialization with xavier_uniform_
+            # Then reshape to 1D for the model's usage
+            temp_tensor = torch.ones(time_dim, 1)
+            nn.init.xavier_uniform_(temp_tensor)
+            self.basis_freq = nn.Parameter(temp_tensor.view(-1))
+            self.phase = nn.Parameter(torch.zeros(time_dim))
+        else:
+            # Fixed frequency range for Fourier basis
+            freq_list = torch.logspace(start=0, end=4, steps=time_dim // 2) * time_scale
+            self.register_buffer('freq_list', freq_list)
         
-    def forward(self, timestamps):
+    def forward(self, timestamps, ref_time=None):
         """
         Forward pass: encode timestamps into trigonometric embeddings.
         
         Args:
             timestamps (torch.Tensor): Tensor of timestamps.
+            ref_time (torch.Tensor, optional): Reference time for relative encoding.
+                If provided, encodes t - ref_t instead of absolute time.
             
         Returns:
             torch.Tensor: Time encoding vectors.
         """
-        # Reshape timestamps for broadcasting
-        timestamps = timestamps.unsqueeze(-1)
+        # Apply relative time encoding if reference time is provided
+        if ref_time is not None:
+            if ref_time.dim() < timestamps.dim():
+                ref_time = ref_time.unsqueeze(-1)
+            # Compute time difference
+            timestamps = timestamps - ref_time
         
-        # Compute time features using Fourier basis
-        time_encoding = torch.cos(timestamps * self.basis_freq + self.phase)
+        # Reshape timestamps for broadcasting
+        t = timestamps.unsqueeze(-1)
+        
+        if self.trainable:
+            # Trainable Fourier basis
+            time_encoding = torch.cos(t * self.basis_freq + self.phase)
+        else:
+            # Fixed Fourier basis with both cos and sin components
+            cos_terms = torch.cos(t * self.freq_list.unsqueeze(0))
+            sin_terms = torch.sin(t * self.freq_list.unsqueeze(0))
+            time_encoding = torch.cat([cos_terms, sin_terms], dim=-1)
         
         return time_encoding
 
@@ -91,6 +117,9 @@ class MultiHeadAttention(nn.Module):
         # Dropout layer
         self.dropout_layer = nn.Dropout(dropout)
         
+        # Scaling factor for dot-product attention
+        self.scaling = attention_dim ** -0.5
+        
     def forward(self, query_nodes, key_nodes, query_time, key_time, mask=None):
         """
         Forward pass of multi-head attention.
@@ -122,17 +151,22 @@ class MultiHeadAttention(nn.Module):
             key_combined = torch.cat([key_nodes, key_time], dim=-1)
         
         # Linear projections
-        q = self.q_linear(query_combined)
-        k = self.k_linear(key_combined)
-        v = self.v_linear(key_combined)
+        q = self.q_linear(query_combined)  # [batch, q_len, num_heads * attention_dim]
+        k = self.k_linear(key_combined)    # [batch, k_len, num_heads * attention_dim]
+        v = self.v_linear(key_combined)    # [batch, v_len, num_heads * attention_dim]
         
         # Reshape for multi-head attention
-        q = q.view(batch_size, 1, self.num_heads, self.attention_dim).permute(0, 2, 1, 3)
-        k = k.view(batch_size, num_neighbors, self.num_heads, self.attention_dim).permute(0, 2, 1, 3)
-        v = v.view(batch_size, num_neighbors, self.num_heads, self.attention_dim).permute(0, 2, 1, 3)
+        q = q.view(batch_size, 1, self.num_heads, self.attention_dim)
+        k = k.view(batch_size, num_neighbors, self.num_heads, self.attention_dim)
+        v = v.view(batch_size, num_neighbors, self.num_heads, self.attention_dim)
         
-        # Compute attention scores
-        scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(self.attention_dim)
+        # Transpose to [batch, head, seq_len, attention_dim]
+        q = q.transpose(1, 2)  # [batch, head, 1, attention_dim]
+        k = k.transpose(1, 2)  # [batch, head, neighbors, attention_dim]
+        v = v.transpose(1, 2)  # [batch, head, neighbors, attention_dim]
+        
+        # Compute attention scores with scaling
+        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
         
         # Apply mask if provided
         if mask is not None:
@@ -147,7 +181,7 @@ class MultiHeadAttention(nn.Module):
         attn_output = torch.matmul(attn_weights, v)
         
         # Reshape and combine heads
-        attn_output = attn_output.permute(0, 2, 1, 3).contiguous()
+        attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(batch_size, 1, self.num_heads * self.attention_dim)
         
         # Apply output projection
@@ -190,10 +224,10 @@ class TemporalGraphAttentionLayer(nn.Module):
         
         # Feed-forward network
         self.feed_forward = nn.Sequential(
-            nn.Linear(node_dim, node_dim * 2),
+            nn.Linear(node_dim, node_dim * 4),  # Wider FFN for more expressivity
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(node_dim * 2, node_dim)
+            nn.Linear(node_dim * 4, node_dim)
         )
         
         # Layer normalization
@@ -259,8 +293,22 @@ class TemporalGraphAttentionNetwork(nn.Module):
         self.dropout = config['dropout']
         self.attention_dim = config['attention_dim']
         
+        # Time encoding parameters
+        self.time_trainable = config.get('time_trainable', True)
+        self.time_scale = config.get('time_scale', 1.0)
+        
         # Time encoding layer
-        self.time_encoder = TimeEncodingLayer(self.time_dim)
+        self.time_encoder = TimeEncodingLayer(
+            time_dim=self.time_dim,
+            trainable=self.time_trainable,
+            time_scale=self.time_scale
+        )
+        
+        # Node feature projection (optional)
+        if 'input_projection' in config and config['input_projection']:
+            self.feature_projection = nn.Linear(self.node_dim, self.node_dim)
+        else:
+            self.feature_projection = nn.Identity()
         
         # Graph attention layers
         self.layers = nn.ModuleList([

@@ -15,7 +15,7 @@ from torch_geometric.nn import GATConv, GCNConv
 class MemoryModule(nn.Module):
     """Memory module for TGN that maintains and updates node states over time."""
     
-    def __init__(self, memory_dim, node_features_dim, message_dim, device='cpu'):
+    def __init__(self, memory_dim, node_features_dim, message_dim, device='cpu', memory_updater='gru'):
         """
         Initialize the memory module.
         
@@ -24,6 +24,7 @@ class MemoryModule(nn.Module):
             node_features_dim (int): Dimension of node features.
             message_dim (int): Dimension of message vectors.
             device (str): Device to use ('cpu' or 'cuda').
+            memory_updater (str): Memory update mechanism ('gru', 'rnn', or 'mlp').
         """
         super(MemoryModule, self).__init__()
         
@@ -31,12 +32,27 @@ class MemoryModule(nn.Module):
         self.node_features_dim = node_features_dim
         self.message_dim = message_dim
         self.device = device
+        self.memory_updater = memory_updater
         
-        # Memory updating mechanism (GRU)
-        self.gru = nn.GRUCell(
-            input_size=message_dim,
-            hidden_size=memory_dim
-        )
+        # Memory updating mechanism
+        if memory_updater == 'gru':
+            self.memory_updater_func = nn.GRUCell(
+                input_size=message_dim,
+                hidden_size=memory_dim
+            )
+        elif memory_updater == 'rnn':
+            self.memory_updater_func = nn.RNNCell(
+                input_size=message_dim,
+                hidden_size=memory_dim
+            )
+        elif memory_updater == 'mlp':
+            self.memory_updater_func = nn.Sequential(
+                nn.Linear(message_dim + memory_dim, memory_dim),
+                nn.ReLU(),
+                nn.Linear(memory_dim, memory_dim)
+            )
+        else:
+            raise ValueError(f"Unknown memory updater: {memory_updater}")
         
         # Message function: combines node features and message content
         self.message_fn = nn.Sequential(
@@ -44,6 +60,9 @@ class MemoryModule(nn.Module):
             nn.ReLU(),
             nn.Linear(message_dim, message_dim)
         )
+        
+        # Time projection layer for temporal effects
+        self.time_proj = nn.Linear(1, message_dim)
         
         # Last update time for each node
         self.last_update = None
@@ -70,12 +89,12 @@ class MemoryModule(nn.Module):
         Args:
             node_idxs (torch.Tensor): Indices of nodes to update.
             node_features (torch.Tensor): Features of the nodes.
-            edge_features (torch.Tensor): Features of the edges.
+            edge_features (torch.Tensor): Features of the edges (including time encoding).
             timestamps (torch.Tensor): Timestamps of the updates.
         """
         if self.memory is None:
-            num_nodes = max(node_idxs) + 1
-            self.reset_state(num_nodes)
+            max_idx = max(node_idxs.max().item() + 1, 10000)  # Ensure minimum size
+            self.reset_state(max_idx)
         
         # Compute time delta for temporal effects
         prev_update = self.last_update[node_idxs]
@@ -86,18 +105,24 @@ class MemoryModule(nn.Module):
         node_memory = self.memory[node_idxs]
         
         # Compute messages using node features, memory, and edge features
+        # Make sure edge_features is already combined with time encoding
         messages = self.message_fn(
             torch.cat([node_features, node_memory, edge_features], dim=1)
         )
         
-        # Aggregate messages for each node
+        # Aggregate messages for each node (using most recent message)
         self.messages[node_idxs] = messages
         
-        # Update memory using GRU cell
-        updated_memory = self.gru(
-            messages,
-            node_memory
-        )
+        # Update memory based on the chosen mechanism
+        if self.memory_updater in ['gru', 'rnn']:
+            updated_memory = self.memory_updater_func(
+                messages,
+                node_memory
+            )
+        else:  # MLP
+            updated_memory = self.memory_updater_func(
+                torch.cat([messages, node_memory], dim=1)
+            )
         
         # Update memory and last update time
         self.memory[node_idxs] = updated_memory
@@ -123,19 +148,37 @@ class MemoryModule(nn.Module):
 class TimeEncoder(nn.Module):
     """Encoder for temporal information."""
     
-    def __init__(self, time_dim):
+    def __init__(self, time_dim, method='sin'):
         """
         Initialize time encoder.
         
         Args:
             time_dim (int): Dimension of time encoding.
+            method (str): Encoding method ('sin', 'fourier', or 'learnable').
         """
         super(TimeEncoder, self).__init__()
         
         self.time_dim = time_dim
-        # Learnable parameters for time encoding
-        self.w = nn.Parameter(torch.ones(time_dim))
-        self.b = nn.Parameter(torch.zeros(time_dim))
+        self.method = method
+        
+        if method == 'sin':
+            # Learnable parameters for time encoding
+            self.w = nn.Parameter(torch.ones(time_dim))
+            self.b = nn.Parameter(torch.zeros(time_dim))
+        elif method == 'fourier':
+            # Fourier basis frequencies
+            time_scale = 1.0  # Adjustable scale for time differences
+            freq_list = torch.logspace(start=0, end=9, steps=time_dim // 2) * time_scale
+            self.register_buffer('freq_list', freq_list)
+        elif method == 'learnable':
+            # Fully learnable time encoding
+            self.time_encoder = nn.Sequential(
+                nn.Linear(1, time_dim),
+                nn.ReLU(),
+                nn.Linear(time_dim, time_dim)
+            )
+        else:
+            raise ValueError(f"Unknown time encoding method: {method}")
         
     def forward(self, timestamps):
         """
@@ -147,8 +190,19 @@ class TimeEncoder(nn.Module):
         Returns:
             torch.Tensor: Encoded timestamps.
         """
-        # Use sine function for encoding
-        time_encoding = torch.sin(self.w * timestamps.unsqueeze(1) + self.b)
+        if self.method == 'sin':
+            # Simple sine function for encoding
+            time_encoding = torch.sin(self.w * timestamps.unsqueeze(1) + self.b)
+        elif self.method == 'fourier':
+            # Fourier basis encoding
+            t = timestamps.unsqueeze(1)
+            cos_terms = torch.cos(t * self.freq_list.unsqueeze(0))
+            sin_terms = torch.sin(t * self.freq_list.unsqueeze(0))
+            time_encoding = torch.cat([cos_terms, sin_terms], dim=1)
+        elif self.method == 'learnable':
+            # Fully learnable encoding
+            time_encoding = self.time_encoder(timestamps.unsqueeze(1))
+        
         return time_encoding
 
 
@@ -213,76 +267,116 @@ class GraphAttentionLayer(nn.Module):
 
 class TemporalGraphNetwork(nn.Module):
     """
-    Temporal Graph Network (TGN) model for misinformation detection.
+    Temporal Graph Network (TGN) for dynamic graph learning.
     
-    This model combines graph neural networks with temporal dynamics and node memory
-    to learn representations that capture the evolution of misinformation.
+    Adapts the architecture from the paper "Temporal Graph Networks for Deep Learning on Dynamic Graphs"
+    (https://arxiv.org/abs/2006.10637)
     """
     
-    def __init__(self, config, num_nodes):
+    def __init__(self, 
+                 node_dim, 
+                 edge_dim,
+                 time_dim,
+                 memory_dim,
+                 embedding_dim=32,  # Reduced from default
+                 num_neighbors=5,   # Reduced for small graph
+                 num_layers=1,      # Reduced number of layers
+                 dropout=0.1,
+                 use_memory=True,
+                 memory_updater='rnn',
+                 memory_update_at_end=True,
+                 embedding_module='graph_attention',
+                 num_classes=2):
         """
-        Initialize the TGN model.
+        Initialize TGN model.
         
         Args:
-            config (dict): Model configuration.
-            num_nodes (int): Number of nodes in the graph.
+            node_dim (int): Dimension of input node features.
+            edge_dim (int): Dimension of input edge features.
+            time_dim (int): Dimension of time encoding.
+            memory_dim (int): Dimension of memory.
+            embedding_dim (int): Dimension of output embeddings.
+            num_neighbors (int): Number of neighbors to sample.
+            num_layers (int): Number of layers.
+            dropout (float): Dropout rate.
+            use_memory (bool): Whether to use memory.
+            memory_updater (str): Type of memory updater ('rnn', 'gru').
+            memory_update_at_end (bool): Whether to update memory at the end of batch.
+            embedding_module (str): Type of embedding module ('graph_attention', 'graph_sum', 'identity').
+            num_classes (int): Number of output classes.
         """
         super(TemporalGraphNetwork, self).__init__()
         
-        self.config = config
-        self.num_nodes = num_nodes
+        self.node_dim = node_dim
+        self.edge_dim = edge_dim
+        self.time_dim = time_dim
+        self.memory_dim = memory_dim
+        self.embedding_dim = embedding_dim
+        self.num_neighbors = num_neighbors
+        self.num_layers = num_layers
+        self.use_memory = use_memory
+        self.memory_update_at_end = memory_update_at_end
         
-        # Model dimensions
-        self.node_dim = config['node_dim']
-        self.edge_dim = config['edge_dim']
-        self.time_dim = config['time_dim']
-        self.memory_dim = config['memory_dim']
-        self.num_layers = config['num_layers']
-        self.dropout = config['dropout']
-        
-        # Time encoder
-        self.time_encoder = TimeEncoder(self.time_dim)
-        
-        # Memory module
-        self.memory = MemoryModule(
-            memory_dim=self.memory_dim,
-            node_features_dim=self.node_dim,
-            message_dim=self.node_dim + self.edge_dim + self.time_dim,
-            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        )
-        
-        # Graph embedding layers
-        self.embedding_layers = nn.ModuleList()
-        
-        # First layer: node features + memory to hidden dimension
-        self.embedding_layers.append(
-            GraphAttentionLayer(
-                in_dim=self.node_dim + self.memory_dim + self.time_dim,
-                out_dim=self.node_dim,
-                num_heads=4,
-                dropout=self.dropout
+        # Initialize memory for nodes
+        if self.use_memory:
+            self.memory_dim = memory_dim
+            
+            # Memory updater
+            memory_input_dim = node_dim + memory_dim + edge_dim
+            
+            # Message function to generate messages for memory update
+            self.message_fn = torch.nn.Sequential(
+                torch.nn.Linear(memory_input_dim, embedding_dim),
+                torch.nn.ReLU(),
+                torch.nn.Linear(embedding_dim, memory_dim),
+                torch.nn.ReLU()
             )
-        )
+            
+            # Memory updater module
+            if memory_updater == 'rnn':
+                self.memory_updater = MemoryUpdater(memory_dim, memory_dim)
+            elif memory_updater == 'gru':
+                self.memory_updater = torch.nn.GRUCell(memory_dim, memory_dim)
+            else:
+                raise ValueError(f"Unknown memory updater: {memory_updater}")
+            
+            # Time encoder for memory update
+            self.time_encoder = TimeEncoder(time_dim)
+            
+            # Initialize memory
+            self.memory = Memory(memory_dim)
         
-        # Additional embedding layers
-        for _ in range(self.num_layers - 1):
-            self.embedding_layers.append(
-                GraphAttentionLayer(
-                    in_dim=self.node_dim,
-                    out_dim=self.node_dim,
-                    num_heads=4,
-                    dropout=self.dropout
-                )
+        # Embedding module
+        if embedding_module == 'graph_attention':
+            self.embedding_module = GraphAttentionEmbedding(
+                node_dim + memory_dim if use_memory else node_dim,
+                embedding_dim,
+                edge_dim + time_dim,
+                num_neighbors,
+                dropout
             )
+        elif embedding_module == 'graph_sum':
+            self.embedding_module = GraphSumEmbedding(
+                node_dim + memory_dim if use_memory else node_dim,
+                embedding_dim,
+                edge_dim + time_dim
+            )
+        elif embedding_module == 'identity':
+            self.embedding_module = IdentityEmbedding(
+                node_dim + memory_dim if use_memory else node_dim,
+                embedding_dim
+            )
+        else:
+            raise ValueError(f"Unknown embedding module: {embedding_module}")
         
-        # Classification layer
-        self.classifier = nn.Sequential(
-            nn.Linear(self.node_dim, self.node_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.node_dim // 2, 1)
+        # MLP for final prediction
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(embedding_dim, embedding_dim // 2),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout),
+            torch.nn.Linear(embedding_dim // 2, num_classes)
         )
-        
+
     def compute_temporal_embeddings(self, node_features, edge_index, edge_attr, edge_times):
         """
         Compute embeddings for all nodes considering temporal information.
@@ -328,11 +422,14 @@ class TemporalGraphNetwork(nn.Module):
             # Encode edge times
             time_encodings = self.time_encoder(batch_edge_times)
             
+            # Combine edge attributes with time encodings
+            combined_features = torch.cat([batch_edge_attr, time_encodings], dim=1)
+            
             # Update memory for source nodes
             self.memory.update_memory(
                 src, 
                 embeddings[src], 
-                torch.cat([batch_edge_attr, time_encodings], dim=1),
+                combined_features,
                 batch_edge_times
             )
         
@@ -386,6 +483,6 @@ class TemporalGraphNetwork(nn.Module):
         
         # Apply classifier only to post nodes
         post_embeddings = embeddings[post_mask]
-        logits = self.classifier(post_embeddings).squeeze(-1)
+        logits = self.mlp(post_embeddings).squeeze(-1)
         
         return torch.sigmoid(logits)
