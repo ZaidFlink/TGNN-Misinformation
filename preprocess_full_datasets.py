@@ -93,190 +93,116 @@ class FullDatasetPreprocessor:
         print("Processing CoAID dataset...")
         
         # Paths to dataset directories
-        coaid_dir = 'data/raw/coaid'
-        
-        # List all version directories
-        version_dirs = [
-            d for d in os.listdir(coaid_dir) 
-            if os.path.isdir(os.path.join(coaid_dir, d)) and (
-                d.endswith('-2020') or d == 'v0.4'
-            )
-        ]
+        coaid_dir = self.config['paths']['coaid']['raw']
         
         # Initialize dataframes to store posts and interactions
         all_posts = []
         all_interactions = []
         
         # Process each version directory
+        version_dirs = [d for d in os.listdir(coaid_dir) 
+                       if os.path.isdir(os.path.join(coaid_dir, d)) and d.endswith('-2020')]
+        
+        print(f"Found {len(version_dirs)} version directories: {version_dirs}")
+        
         for version_dir in version_dirs:
-            print(f"Processing CoAID directory: {version_dir}")
-            
+            print(f"\nProcessing CoAID directory: {version_dir}")
             dir_path = os.path.join(coaid_dir, version_dir)
             
-            # Fake news
-            fake_news_files = glob.glob(os.path.join(dir_path, '*Fake*.csv'))
-            for file_path in fake_news_files:
-                try:
-                    df = pd.read_csv(file_path, encoding='utf-8')
-                    
-                    # Check if this is a news or tweets file
-                    if 'tweets' in file_path.lower():
-                        # This is a tweets/interactions file
-                        if '_replies' in file_path:
-                            # These are replies to tweets (interactions)
-                            if 'tweet_id' in df.columns and 'reply_text' in df.columns:
-                                interactions_df = df.rename(columns={
-                                    'tweet_id': 'post_id',
-                                    'reply_text': 'content',
-                                    'reply_created_at': 'timestamp'
-                                })
-                                
-                                interactions_df['interaction_type'] = 'comment'
-                                interactions_df['user_id'] = interactions_df.get('user_screen_name', 'unknown_user')
-                                
-                                # Keep only necessary columns
-                                if 'timestamp' in interactions_df.columns and 'user_id' in interactions_df.columns and 'post_id' in interactions_df.columns:
-                                    interactions_df = interactions_df[['timestamp', 'user_id', 'post_id', 'interaction_type', 'content']]
-                                    all_interactions.append(interactions_df)
-                        else:
-                            # These are original tweets (posts)
-                            if 'tweet_id' in df.columns and 'tweet_text' in df.columns:
-                                posts_df = df.rename(columns={
-                                    'tweet_id': 'post_id',
-                                    'tweet_text': 'content',
-                                    'tweet_created_at': 'timestamp',
-                                    'user_screen_name': 'author_id'
-                                })
-                                
-                                posts_df['is_misinformation'] = 1  # Fake news
-                                
-                                # Keep only necessary columns
-                                if 'post_id' in posts_df.columns and 'content' in posts_df.columns:
-                                    # Fill missing values
-                                    posts_df['author_id'] = posts_df.get('author_id', f'author_{version_dir}')
-                                    posts_df['timestamp'] = posts_df.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                                    
-                                    posts_df = posts_df[['post_id', 'author_id', 'timestamp', 'content', 'is_misinformation']]
-                                    all_posts.append(posts_df)
-                    else:
-                        # This is a news file (posts)
-                        if 'news_id' in df.columns or 'id' in df.columns:
-                            id_col = 'news_id' if 'news_id' in df.columns else 'id'
-                            
-                            posts_df = pd.DataFrame()
-                            posts_df['post_id'] = df[id_col].astype(str)
-                            posts_df['author_id'] = df.get('source', f'source_{version_dir}')
-                            posts_df['timestamp'] = df.get('publish_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                            
-                            # Combine title and content for better representation
-                            content_cols = [col for col in df.columns if col in ['title', 'content', 'newstitle']]
-                            if content_cols:
-                                posts_df['content'] = df[content_cols].astype(str).agg(' '.join, axis=1)
-                            else:
-                                posts_df['content'] = "No content available"
-                                
-                            posts_df['is_misinformation'] = 1  # Fake news
-                            
-                            all_posts.append(posts_df)
-                except Exception as e:
-                    print(f"Error processing {file_path}: {str(e)}")
+            # Process news files
+            news_files = glob.glob(os.path.join(dir_path, 'News*.csv'))
+            news_files = [f for f in news_files if not ('tweets' in f.lower() or 'replies' in f.lower())]
+            print(f"Found {len(news_files)} news files")
             
-            # Real news - similar process but marked as not misinformation
-            real_news_files = glob.glob(os.path.join(dir_path, '*Real*.csv'))
-            for file_path in real_news_files:
+            for file_path in news_files:
                 try:
-                    df = pd.read_csv(file_path, encoding='utf-8')
+                    print(f"Processing news file: {os.path.basename(file_path)}")
+                    df = pd.read_csv(file_path)
                     
-                    # Check if this is a news or tweets file
-                    if 'tweets' in file_path.lower():
-                        # This is a tweets/interactions file
-                        if '_replies' in file_path:
-                            # These are replies to tweets (interactions)
-                            if 'tweet_id' in df.columns and 'reply_text' in df.columns:
-                                interactions_df = df.rename(columns={
-                                    'tweet_id': 'post_id',
-                                    'reply_text': 'content',
-                                    'reply_created_at': 'timestamp'
-                                })
-                                
-                                interactions_df['interaction_type'] = 'comment'
-                                interactions_df['user_id'] = interactions_df.get('user_screen_name', 'unknown_user')
-                                
-                                # Keep only necessary columns
-                                if 'timestamp' in interactions_df.columns and 'user_id' in interactions_df.columns and 'post_id' in interactions_df.columns:
-                                    interactions_df = interactions_df[['timestamp', 'user_id', 'post_id', 'interaction_type', 'content']]
-                                    all_interactions.append(interactions_df)
-                        else:
-                            # These are original tweets (posts)
-                            if 'tweet_id' in df.columns and 'tweet_text' in df.columns:
-                                posts_df = df.rename(columns={
-                                    'tweet_id': 'post_id',
-                                    'tweet_text': 'content',
-                                    'tweet_created_at': 'timestamp',
-                                    'user_screen_name': 'author_id'
-                                })
-                                
-                                posts_df['is_misinformation'] = 0  # Real news
-                                
-                                # Keep only necessary columns
-                                if 'post_id' in posts_df.columns and 'content' in posts_df.columns:
-                                    # Fill missing values
-                                    posts_df['author_id'] = posts_df.get('author_id', f'author_{version_dir}')
-                                    posts_df['timestamp'] = posts_df.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                                    
-                                    posts_df = posts_df[['post_id', 'author_id', 'timestamp', 'content', 'is_misinformation']]
-                                    all_posts.append(posts_df)
-                    else:
-                        # This is a news file (posts)
-                        if 'news_id' in df.columns or 'id' in df.columns:
-                            id_col = 'news_id' if 'news_id' in df.columns else 'id'
-                            
-                            posts_df = pd.DataFrame()
-                            posts_df['post_id'] = df[id_col].astype(str)
-                            posts_df['author_id'] = df.get('source', f'source_{version_dir}')
-                            posts_df['timestamp'] = df.get('publish_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                            
-                            # Combine title and content for better representation
-                            content_cols = [col for col in df.columns if col in ['title', 'content', 'newstitle']]
-                            if content_cols:
-                                posts_df['content'] = df[content_cols].astype(str).agg(' '.join, axis=1)
-                            else:
-                                posts_df['content'] = "No content available"
-                                
-                            posts_df['is_misinformation'] = 0  # Real news
-                            
-                            all_posts.append(posts_df)
+                    # Determine if it's fake or real news
+                    is_fake = 'Fake' in file_path
+                    
+                    # Create posts dataframe
+                    posts_df = pd.DataFrame()
+                    posts_df['post_id'] = df.index.astype(str)  # Using index as ID
+                    posts_df['author_id'] = df['type'].fillna('unknown')  # Using type as author
+                    posts_df['timestamp'] = pd.to_datetime(df['publish_date']).fillna(pd.Timestamp.now()).dt.strftime('%Y-%m-%d %H:%M:%S')
+                    posts_df['content'] = df['title'].fillna('') + ' ' + df['content'].fillna('')
+                    posts_df['is_misinformation'] = 1 if is_fake else 0
+                    
+                    all_posts.append(posts_df)
+                    print(f"Added {len(posts_df)} news posts")
+                    
                 except Exception as e:
-                    print(f"Error processing {file_path}: {str(e)}")
+                    print(f"Error processing news file {file_path}: {str(e)}")
+            
+            # Process tweets and replies
+            tweet_files = glob.glob(os.path.join(dir_path, '*tweets.csv'))
+            tweet_files = [f for f in tweet_files if not 'replies' in f.lower()]
+            reply_files = glob.glob(os.path.join(dir_path, '*replies.csv'))
+            
+            print(f"Found {len(tweet_files)} tweet files and {len(reply_files)} reply files")
+            
+            # Process tweets (posts)
+            for file_path in tweet_files:
+                try:
+                    print(f"Processing tweet file: {os.path.basename(file_path)}")
+                    df = pd.read_csv(file_path)
+                    
+                    # Determine if it's fake or real
+                    is_fake = 'Fake' in file_path
+                    
+                    posts_df = pd.DataFrame()
+                    posts_df['post_id'] = df['tweet_id'].astype(str)
+                    posts_df['author_id'] = 'twitter_user_' + df['index'].astype(str)  # Creating synthetic user IDs
+                    posts_df['timestamp'] = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')  # Using current time as tweets don't have timestamps
+                    posts_df['content'] = 'Tweet ' + df['tweet_id'].astype(str)  # Using tweet ID as content since we don't have the actual text
+                    posts_df['is_misinformation'] = 1 if is_fake else 0
+                    
+                    all_posts.append(posts_df)
+                    print(f"Added {len(posts_df)} tweet posts")
+                    
+                except Exception as e:
+                    print(f"Error processing tweet file {file_path}: {str(e)}")
+            
+            # Process replies (interactions)
+            for file_path in reply_files:
+                try:
+                    print(f"Processing reply file: {os.path.basename(file_path)}")
+                    df = pd.read_csv(file_path)
+                    
+                    interactions_df = pd.DataFrame()
+                    interactions_df['post_id'] = df['tweet_id'].astype(str)
+                    interactions_df['user_id'] = 'replier_' + df['reply_id'].astype(str)  # Creating synthetic user IDs
+                    interactions_df['timestamp'] = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')  # Using current time as replies don't have timestamps
+                    interactions_df['content'] = 'Reply ' + df['reply_id'].astype(str)  # Using reply ID as content
+                    interactions_df['interaction_type'] = 'reply'
+                    
+                    all_interactions.append(interactions_df)
+                    print(f"Added {len(interactions_df)} interactions")
+                    
+                except Exception as e:
+                    print(f"Error processing reply file {file_path}: {str(e)}")
         
         # Combine all posts and interactions
         if all_posts:
-            combined_posts = pd.concat(all_posts, ignore_index=True)
-            # Remove duplicates
-            combined_posts = combined_posts.drop_duplicates(subset=['post_id']).reset_index(drop=True)
-            print(f"Total CoAID posts: {len(combined_posts)}")
-            print(f"Misinformation posts: {combined_posts['is_misinformation'].sum()} ({combined_posts['is_misinformation'].mean()*100:.1f}%)")
+            final_posts = pd.concat(all_posts, ignore_index=True)
+            final_posts = final_posts.drop_duplicates(subset=['post_id']).reset_index(drop=True)
+            print(f"\nTotal posts collected: {len(final_posts)}")
+            print(f"Misinformation posts: {final_posts['is_misinformation'].sum()} ({final_posts['is_misinformation'].mean()*100:.1f}%)")
         else:
-            combined_posts = pd.DataFrame(columns=['post_id', 'author_id', 'timestamp', 'content', 'is_misinformation'])
-            print("No posts found in CoAID dataset")
-            
+            final_posts = pd.DataFrame(columns=['post_id', 'author_id', 'timestamp', 'content', 'is_misinformation'])
+            print("No posts were collected!")
+        
         if all_interactions:
-            combined_interactions = pd.concat(all_interactions, ignore_index=True)
-            # Remove duplicates
-            combined_interactions = combined_interactions.drop_duplicates(subset=['user_id', 'post_id', 'timestamp']).reset_index(drop=True)
-            print(f"Total CoAID interactions: {len(combined_interactions)}")
+            final_interactions = pd.concat(all_interactions, ignore_index=True)
+            final_interactions = final_interactions.drop_duplicates(subset=['post_id', 'user_id', 'timestamp']).reset_index(drop=True)
+            print(f"Total interactions collected: {len(final_interactions)}")
         else:
-            combined_interactions = pd.DataFrame(columns=['timestamp', 'user_id', 'post_id', 'interaction_type', 'content'])
-            print("No interactions found in CoAID dataset")
+            final_interactions = pd.DataFrame(columns=['post_id', 'user_id', 'timestamp', 'content', 'interaction_type'])
+            print("No interactions were collected!")
         
-        # Save processed data
-        os.makedirs('data/processed', exist_ok=True)
-        
-        # Save to CSV files for later use
-        combined_posts.to_csv('data/processed/coaid_posts.csv', index=False)
-        combined_interactions.to_csv('data/processed/coaid_interactions.csv', index=False)
-        
-        return combined_posts, combined_interactions
+        return final_posts, final_interactions
     
     def process_fakenewsnet(self):
         """Process the FakeNewsNet dataset."""
@@ -581,24 +507,34 @@ class FullDatasetPreprocessor:
     def process_all_datasets(self):
         """Process all datasets."""
         # Process CoAID dataset
+        print("\nProcessing CoAID dataset...")
         coaid_posts, coaid_interactions = self.process_coaid()
-        coaid_graph = self.construct_temporal_graph(coaid_posts, coaid_interactions, 'coaid')
         
-        # Process FakeNewsNet dataset
-        fakenewsnet_posts, fakenewsnet_interactions = self.process_fakenewsnet()
-        fakenewsnet_graph = self.construct_temporal_graph(fakenewsnet_posts, fakenewsnet_interactions, 'fakenewsnet')
+        if len(coaid_posts) > 0:
+            print("\nConstructing temporal graph for CoAID...")
+            coaid_graph = self.construct_temporal_graph(coaid_posts, coaid_interactions, 'coaid')
+            
+            # Save processed data
+            print("\nSaving processed data...")
+            processed_dir = os.path.dirname(self.config['paths']['coaid']['processed'])
+            os.makedirs(processed_dir, exist_ok=True)
+            
+            with open(self.config['paths']['coaid']['processed'], 'wb') as f:
+                pickle.dump(coaid_graph, f)
+            
+            print(f"CoAID data saved to {self.config['paths']['coaid']['processed']}")
+        else:
+            print("No CoAID data to process!")
+            coaid_graph = None
         
-        print("All datasets processed successfully!")
-        
-        return {
-            'coaid': coaid_graph,
-            'fakenewsnet': fakenewsnet_graph
-        }
+        return {'coaid': coaid_graph}
 
 def main():
-    """Main function to process all datasets."""
+    """Main function to process the CoAID dataset."""
+    print("Starting data preprocessing...")
     preprocessor = FullDatasetPreprocessor()
-    preprocessor.process_all_datasets()
+    graphs = preprocessor.process_all_datasets()
+    print("\nPreprocessing completed!")
 
 if __name__ == "__main__":
     main() 

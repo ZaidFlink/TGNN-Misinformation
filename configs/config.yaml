@@ -1,12 +1,30 @@
 # Configuration for misinformation detection model
+
+# General parameters
 batch_size: 128
 learning_rate: 0.001
 hidden_dim: 64
-tfidf_max_features: 5000
+device: 'cpu' # using CPU for now
 
-# Model parameters
-model:
+# Data preprocessing parameters
+data:
+  feature_engineering:
+    text:
+      max_features: 5000
+      min_df: 5
+      max_df: 0.95
+    time:
+      encoding_dim: 100
+      max_time_delta: 365 # maximum time difference in days
+  dataset: 'coaid' # only process CoAID for now
+  node_dim: 100 # dimension for node features
+  edge_dim: 50 # dimension for edge features
+
+# Models configuration
+models:
   tgn:
+    node_dim: 100
+    edge_dim: 50
     memory_dim: 100
     time_dim: 100
     message_dim: 100
@@ -14,11 +32,12 @@ model:
     n_heads: 2
     dropout: 0.1
     use_memory: true
-  
+
   gcn:
     hidden_channels: 100
     num_layers: 2
     dropout: 0.1
+    num_snapshots: 24 # number of temporal snapshots for static graph
 
 # Training settings
 training:
@@ -27,13 +46,10 @@ training:
   val_ratio: 0.15
   test_ratio: 0.15
   eval_frequency: 1
-  
+
 # Paths
 paths:
   coaid:
     raw: data/raw/coaid
     processed: data/processed/coaid_processed.pkl
-  fakenewsnet:
-    raw: data/raw/fakenewsnet
-    processed: data/processed/fakenewsnet_processed.pkl
   results: results/
