@@ -1,0 +1,17 @@
+{
+    "num_process": 4,
+    "tweet_keys_file": "tweet_keys_file.json",
+    "data_collection_choice": [
+        {"news_source": "politifact", "label": "fake"},
+        {"news_source": "politifact", "label": "real"},
+        {"news_source": "gossipcop", "label": "fake"},
+        {"news_source": "gossipcop", "label": "real"}
+    ],
+    "data_features_to_collect": [
+        "news_articles",
+        "tweets",
+        "retweets",
+        "user_profile",
+        "user_timeline_tweets"
+    ]
+} 

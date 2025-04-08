@@ -46,4 +46,14 @@ ENV/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# Generated images and reports
+*.png
+*.jpg
+*.jpeg
+*_report.md
+
+# Embedded git repositories
+TGB/
+code/ 
